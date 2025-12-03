@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Invoice Factoring Smart Contract — Tutorial</title>
+  <style>
+    :root{
+      --bg:#fbfcfd;
+      --card:#ffffff;
+      --muted:#6b7280;
+      --accent:#0b5cff;
+      --heading:#022a4a;
+      --mono: Menlo, Monaco, "Courier New", monospace;
+    }
+    body{
+      font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+      background:var(--bg);
+      color:#111827;
+      margin:0;
+      padding:28px;
+      line-height:1.6;
+    }
+    .container{ max-width:980px; margin:0 auto; }
+    header{ margin-bottom:18px; }
+    h1{ color:var(--heading); margin:0 0 6px; font-size:28px; }
+    p.lead{ color:var(--muted); margin:6px 0 18px; }
+    nav.toc{ background:var(--card); border:1px solid #e6eef7; padding:12px; border-radius:8px; margin-bottom:18px; }
+    nav.toc h2{ font-size:16px; margin:0 0 8px; }
+    nav.toc ol{ margin:0; padding-left:18px; color:var(--muted); }
+    section.card{ background:var(--card); border:1px solid #e6eef7; padding:18px; border-radius:10px; margin-bottom:14px; }
+    h2{ color:var(--heading); font-size:20px; margin:0 0 10px; }
+    h3{ color:var(--heading); font-size:16px; margin:12px 0 8px; }
+    pre, code{ font-family:var(--mono); font-size:13px; background:#f4f6fb; padding:8px; border-radius:6px; overflow:auto; display:block; }
+    table{ width:100%; border-collapse:collapse; margin:12px 0; }
+    th,td{ padding:10px; border:1px solid #e6eef7; text-align:left; vertical-align:top; }
+    th{ background:#fbfcff; color:var(--muted); font-weight:600; }
+    ul, ol{ margin:8px 0 12px 20px; color:#374151; }
+    .kbd{ display:inline-block; padding:2px 8px; border-radius:6px; background:#eef2ff; color:var(--accent); font-weight:600; font-size:13px; }
+    footer{ margin-top:18px; color:var(--muted); font-size:13px; }
+    @media (max-width:720px){ body{ padding:14px; } }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>📘 Invoice Factoring Smart Contract – Full Tutorial</h1>
+      <p class="lead">Design, logic, workflow and security guidance for the <code>invoice-factor-plutus.plutus</code> validator.</p>
+    </header>
+
+    <nav class="toc" aria-label="Table of contents">
+      <h2>📚 Table of Contents</h2>
+      <ol>
+        <li><a href="#purpose">Purpose of the Contract</a></li>
+        <li><a href="#datatypes">Data Types</a></li>
+        <li><a href="#helpers">Helper Functions</a></li>
+        <li><a href="#core">Core Validator Logic</a></li>
+        <li><a href="#sigs">Signature & Compliance Rules</a></li>
+        <li><a href="#stable">Stable Token Settlement Logic</a></li>
+        <li><a href="#compile">Script Compilation & Output</a></li>
+        <li><a href="#offchain">Off-chain Workflow</a></li>
+        <li><a href="#testing">Testing Strategy</a></li>
+        <li><a href="#glossary">Glossary</a></li>
+      </ol>
+    </nav>
+
+    <section id="purpose" class="card">
+      <h2>1. 📦 Purpose of the Contract</h2>
+      <p>
+        Implements an <strong>invoice settlement and factoring</strong> flow:
+      </p>
+      <ul>
+        <li>Supplier issues invoice to buyer</li>
+        <li>Invoice may be assigned to a factor (investor)</li>
+        <li>Buyer settles using stable tokens</li>
+        <li>KYC authority signature required for regulated settlements</li>
+        <li>Issuer can mark paid or cancel; payment routes to issuer or factor</li>
+      </ul>
+      <p>Supports traditional settlement, factoring, regulated stable-asset flows, and off-chain reconciliation.</p>
+    </section>
+
+    <section id="datatypes" class="card">
+      <h2>2. 📄 Data Types</h2>
+
+      <h3>InvoiceDatum</h3>
+      <p>Each UTxO stores an invoice with fields:</p>
+      <table>
+        <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td><code>invIssuer</code></td><td>Supplier issuing the invoice</td></tr>
+          <tr><td><code>invBuyer</code></td><td>Buyer responsible for payment</td></tr>
+          <tr><td><code>invAmount</code></td><td>Amount owed (stable token base units)</td></tr>
+          <tr><td><code>invDue</code></td><td>POSIX due date</td></tr>
+          <tr><td><code>invPaid</code></td><td>Boolean flag — invoice paid</td></tr>
+          <tr><td><code>invHash</code></td><td>Off-chain invoice reference hash</td></tr>
+          <tr><td><code>invAssignedTo</code></td><td>Optional factor PubKeyHash</td></tr>
+          <tr><td><code>invStableCS</code>/<code>invStableTN</code></td><td>Stable token identifiers</td></tr>
+          <tr><td><code>invKycAuth</code></td><td>KYC authority PubKeyHash</td></tr>
+        </tbody>
+      </table>
+
+      <h3>InvoiceAction</h3>
+      <p>Redeemers:</p>
+      <ul>
+        <li><code>AssignTo factorPkh</code></li>
+        <li><code>Pay amountPaid paidAt</code></li>
+        <li><code>MarkPaid</code></li>
+        <li><code>Cancel</code></li>
+      </ul>
+    </section>
+
+    <section id="helpers" class="card">
+      <h2>3. 🛠️ Helper Functions Explained</h2>
+
+      <h3><code>pubKeyHashAddress</code></h3>
+      <p>Constructs an address from a PubKeyHash — used to detect payment outputs.</p>
+
+      <h3><code>valuePaidTo</code></h3>
+      <p>Calculates how many stable tokens (CS/TN) a given address receives in <code>txInfoOutputs</code>. Validator uses this to confirm the recipient actually receives funds.</p>
+
+      <h3><code>nowInRange / isPastDue</code></h3>
+      <p>Ensures the transaction validity interval can include a provided timestamp (<code>paidAt</code>), preventing timestamp forgery and enabling auditable settlement dates.</p>
+    </section>
+
+    <section id="core" class="card">
+      <h2>4. 🧠 Core Validator Logic</h2>
+
+      <h3>A. AssignTo</h3>
+      <p>Issuer assigns invoice to a factor.</p>
+      <ul>
+        <li>Only <code>invIssuer</code> may assign: <code>txSignedBy info (invIssuer inv)</code></li>
+        <li>Cannot assign if already paid: <code>not (invPaid inv)</code></li>
+      </ul>
+
+      <h3>B. Pay</h3>
+      <p>Buyer settles the invoice using stable tokens.</p>
+      <ul>
+        <li>Buyer signature required: <code>txSignedBy info (invBuyer inv)</code></li>
+        <li><code>amountPaid &gt;= invAmount</code></li>
+        <li>Timestamp reachable: <code>nowInRange info paidAt</code></li>
+        <li>Funds routed to <code>invAssignedTo</code> if present, otherwise <code>invIssuer</code> — validated via <code>valuePaidTo</code></li>
+        <li>KYC authority must sign: <code>txSignedBy info (invKycAuth inv)</code></li>
+      </ul>
+
+      <h3>C. MarkPaid</h3>
+      <p>Issuer marks invoice as paid after off-chain verification.</p>
+      <ul><li>Only issuer may perform this action (<code>txSignedBy info (invIssuer inv)</code>).</li></ul>
+
+      <h3>D. Cancel</h3>
+      <p>Issuer can cancel if unpaid.</p>
+      <ul>
+        <li>Issuer signature required</li>
+        <li>Cannot cancel if <code>invPaid == True</code></li>
+      </ul>
+    </section>
+
+    <section id="sigs" class="card">
+      <h2>5. 🔐 Signature & Compliance Rules</h2>
+      <table>
+        <thead><tr><th>Action</th><th>Required Signature</th></tr></thead>
+        <tbody>
+          <tr><td>AssignTo</td><td>Issuer</td></tr>
+          <tr><td>Pay</td><td>Buyer + KYC Authority</td></tr>
+          <tr><td>MarkPaid</td><td>Issuer</td></tr>
+          <tr><td>Cancel</td><td>Issuer</td></tr>
+        </tbody>
+      </table>
+      <p><em>Note:</em> Requiring the KYC authority to co-sign Pay enforces compliance (AML/KYC) during on-chain stable-token settlements.</p>
+    </section>
+
+    <section id="stable" class="card">
+      <h2>6. 💰 Stable Token Settlement Logic</h2>
+      <ol>
+        <li>Confirm the correct asset (CurrencySymbol / TokenName).</li>
+        <li>Verify <code>amountPaid &gt;= invAmount</code>.</li>
+        <li>Require KYC signature for regulated settlement.</li>
+        <li>Require buyer signature.</li>
+      </ol>
+      <p>This provides on-chain settlement finality, a proof-of-payment, and compliance enforcement, while allowing factoring routing to a factor when assigned.</p>
+    </section>
+
+    <section id="compile" class="card">
+      <h2>7. ⚙️ Script Compilation & Output</h2>
+      <p>At the bottom of the file the helper <code>saveValidator</code> serialises and writes the compiled script to:</p>
+      <pre><code>invoice-factor-plutus.plutus</code></pre>
+      <p>Use the produced file with <span class="kbd">cardano-cli</span> or off-chain libraries (Lucid, Mesh, Helios) to deploy and interact with the contract.</p>
+    </section>
+
+    <section id="offchain" class="card">
+      <h2>8. 🏗️ Off-chain Workflow</h2>
+      <ol>
+        <li><strong>Issuer creates invoice UTxO:</strong> datum + small ADA to hold the UTxO.</li>
+        <li><strong>Optional assignment:</strong> Issuer spends UTxO with <code>AssignTo factorPkh</code> to transfer payment rights.</li>
+        <li><strong>Buyer pays:</strong> Buyer builds a transaction with <code>Pay amount paidAt</code>, includes stable token output to recipient and KYC signature.</li>
+        <li><strong>Issuer marks paid:</strong> Issuer may call <code>MarkPaid</code> after off-chain bank settlement.</li>
+        <li><strong>Cancel:</strong> Issuer uses <code>Cancel</code> to remove or void the invoice if unpaid.</li>
+      </ol>
+      <p><strong>Off-chain responsibilities:</strong> construct correct outputs (stable token), include required signers, and manage datum updates/state transitions.</p>
+    </section>
+
+    <section id="testing" class="card">
+      <h2>9. 🧪 Testing Strategy</h2>
+
+      <h3>AssignTo tests</h3>
+      <ul>
+        <li>Assigning an already-paid invoice should fail.</li>
+        <li>Non-issuer attempts should fail.</li>
+      </ul>
+
+      <h3>Pay tests</h3>
+      <ul>
+        <li>Wrong asset should fail.</li>
+        <li>Insufficient amount should fail.</li>
+        <li>Missing KYC signature should fail.</li>
+        <li>Correct buyer + KYC signature + payment should succeed.</li>
+      </ul>
+
+      <h3>MarkPaid & Cancel</h3>
+      <ul>
+        <li>MarkPaid without issuer signature should fail.</li>
+        <li>Cancel after paid should fail.</li>
+      </ul>
+    </section>
+
+    <section id="glossary" class="card">
+      <h2>10. 📘 Glossary</h2>
+      <table>
+        <thead><tr><th>Term</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td>Factoring</td><td>Selling an invoice to a financier</td></tr>
+          <tr><td>Issuer</td><td>Supplier issuing the invoice</td></tr>
+          <tr><td>Buyer</td><td>Debtor who owes payment</td></tr>
+          <tr><td>Factor</td><td>Third party who buys invoices</td></tr>
+          <tr><td>KYC Authority</td><td>Compliance signer verifying regulated settlements</td></tr>
+          <tr><td>Stable Token</td><td>Token representing fiat or low-volatility asset</td></tr>
+          <tr><td>Redeemer</td><td>Action submitted when consuming a UTxO</td></tr>
+          <tr><td>Datum</td><td>On-chain state attached to a UTxO</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <footer>
+      <p>Want a state-machine refactor, off-chain Lucid/TypeScript examples, emulator tests, or a React UI for invoice management? Tell me which and I'll generate it.</p>
+    </footer>
+  </div>
+</body>
+</html>
